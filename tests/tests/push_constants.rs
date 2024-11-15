@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 
 use wgpu::util::RenderEncoder;
 use wgpu::*;
-use wgpu_test::{gpu_test, FailureCase, GpuTestConfiguration, TestParameters, TestingContext};
+use wgpu_test::{gpu_test, GpuTestConfiguration, TestParameters, TestingContext};
 
 /// We want to test that partial updates to push constants work as expected.
 ///
@@ -24,34 +24,6 @@ static PARTIAL_UPDATE: GpuTestConfiguration = GpuTestConfiguration::new()
             }),
     )
     .run_async(partial_update_test);
-
-#[gpu_test]
-static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
-    .parameters(
-        TestParameters::default()
-            // On Vulkan, we get a strange internal error that makes no sense.
-            .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
-            .features(wgpu::Features::PUSH_CONSTANTS)
-            .limits(wgpu::Limits {
-                max_push_constant_size: 64,
-                ..Default::default()
-            }),
-    )
-    .run_async(|ctx| render_pass_test(ctx, false));
-
-#[gpu_test]
-static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
-    .parameters(
-        TestParameters::default()
-            // On Vulkan, we get a strange internal error that makes no sense.
-            .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
-            .features(Features::PUSH_CONSTANTS)
-            .limits(Limits {
-                max_push_constant_size: 64,
-                ..Default::default()
-            }),
-    )
-    .run_async(|ctx| render_pass_test(ctx, true));
 
 const SHADER: &str = r#"
     struct Pc {
@@ -185,8 +157,34 @@ async fn partial_update_test(ctx: TestingContext) {
     // second 4 floats the first update
     assert_eq!(floats, [1.0, 2.0, 3.0, 4.0, 1.0, 5.0, 3.0, 4.0]);
 }
+#[gpu_test]
+static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(
+        TestParameters::default()
+            // On Vulkan, we get a strange internal error that makes no sense.
+            // .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
+            .features(wgpu::Features::PUSH_CONSTANTS)
+            .limits(wgpu::Limits {
+                max_push_constant_size: 128,
+                ..Default::default()
+            }),
+    )
+    .run_async(|ctx| render_pass_test(ctx, false));
 
-//
+#[gpu_test]
+static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
+    .parameters(
+        TestParameters::default()
+            // On Vulkan, we get a strange internal error that makes no sense.
+            // .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
+            .features(Features::PUSH_CONSTANTS)
+            .limits(Limits {
+                max_push_constant_size: 128,
+                ..Default::default()
+            }),
+    )
+    .run_async(|ctx| render_pass_test(ctx, true));
+
 // This shader subtracts the values in the second half of the push_constants from the
 // values in the first half, and stores the result in the buffer.
 // We test push constants in both the vertex shader and the fragment shader.
@@ -291,16 +289,10 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
         .device
         .create_pipeline_layout(&PipelineLayoutDescriptor {
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[
-                PushConstantRange {
-                    stages: ShaderStages::VERTEX,
-                    range: 0..(4 * count),
-                },
-                PushConstantRange {
-                    stages: ShaderStages::FRAGMENT,
-                    range: (4 * count)..(8 * count),
-                },
-            ],
+            push_constant_ranges: &[PushConstantRange {
+                stages: ShaderStages::VERTEX_FRAGMENT,
+                range: 0..(8 * count),
+            }],
             ..Default::default()
         });
 
@@ -353,23 +345,21 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
         }],
     });
 
-    let data1: Vec<i32> = (0..count).map(|i| (i as i32) * (i as i32) + 100).collect();
-    let data2: Vec<i32> = (0..count).map(|i| (i as i32) * 200 - 1).collect();
-    let expected_result: Vec<i32> = zip(&data1, &data2).map(|(a, b)| a - b).collect();
+    let data: Vec<i32> = (0.. 2 * count).map(|i| (i * i) as i32).collect();
+    let data1 = &data[0..count as usize]; // part seen by vertex shader
+    let data2 = &data[count as usize ..];  // part seen by fragment shader
+    let expected_result: Vec<i32> = zip(data1, data2).map(|(a, b)| a - b).collect();
 
     fn do_encoding<'a>(
         encoder: &mut dyn RenderEncoder<'a>,
         pipeline: &'a RenderPipeline,
         bind_group: &'a BindGroup,
-        data1: Vec<i32>,
-        data2: Vec<i32>,
+        data: Vec<i32>,
     ) {
-        let count = data1.len() as u32;
-        let data1_as_u8: &[u8] = bytemuck::cast_slice(data1.as_slice());
-        let data2_as_u8: &[u8] = bytemuck::cast_slice(data2.as_slice());
+        let count = (data.len() as u32) / 2;
+        let data_as_u8: &[u8] = bytemuck::cast_slice(data.as_slice());
         encoder.set_pipeline(pipeline);
-        encoder.set_push_constants(ShaderStages::VERTEX, 0, data1_as_u8);
-        encoder.set_push_constants(ShaderStages::FRAGMENT, 4 * count, data2_as_u8);
+        encoder.set_push_constants(ShaderStages::VERTEX_FRAGMENT, 0, data_as_u8);
         encoder.set_bind_group(0, Some(bind_group), &[]);
         encoder.draw(0..count, 0..1);
     }
@@ -388,18 +378,12 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
                         sample_count: 1,
                         ..RenderBundleEncoderDescriptor::default()
                     });
-            do_encoding(
-                &mut render_bundle_encoder,
-                &pipeline,
-                &bind_group,
-                data1,
-                data2,
-            );
+            do_encoding(&mut render_bundle_encoder, &pipeline, &bind_group, data);
             let render_bundle = render_bundle_encoder.finish(&RenderBundleDescriptor::default());
             render_pass.execute_bundles([&render_bundle]);
         } else {
             // Execute the commands directly.
-            do_encoding(&mut render_pass, &pipeline, &bind_group, data1, data2);
+            do_encoding(&mut render_pass, &pipeline, &bind_group, data);
         }
     }
     // Move the result to the cpu buffer, so that we can read them.
