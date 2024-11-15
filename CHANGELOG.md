@@ -85,12 +85,12 @@ fn main(@builtin(position) p : vec4f) -> @location(0) vec4f {
 
 There are some limitations to keep in mind with this new functionality:
 
-- We do not yet support `diagnostic(…)` rules in attribute position (i.e., `@diagnostic(…) fn my_func { … }`). This is being tracked in <https://github.com/gfx-rs/wgpu/issues/5320>. We expect that rules in `fn` attribute position will be relaxed shortly (see <https://github.com/gfx-rs/wgpu/pull/6353>), but the prioritization for statement positions is unclear. If you are blocked by not being able to parse `diagnostic(…)` rules in statement positions, please let us know in that issue, so we can determine how to prioritize it!
+- We support `@diagnostic(…)` rules as `fn` attributes, but prioritization for rules in statement positions (i.e., `if (…) @diagnostic(…) { … }` is unclear. If you are blocked by not being able to parse `diagnostic(…)` rules in statement positions, please let us know in <https://github.com/gfx-rs/wgpu/issues/5320>, so we can determine how to prioritize it!
 - Standard WGSL specifies `error`, `warning`, `info`, and `off` severity levels. These are all technically usable now! A caveat, though: warning- and info-level are only emitted to `stderr` via the `log` façade, rather than being reported through a `Result::Err` in Naga or the `CompilationInfo` interface in `wgpu{,-core}`. This will require breaking changes in Naga to fix, and is being tracked by <https://github.com/gfx-rs/wgpu/issues/6458>.
 - Not all lints can be controlled with `diagnostic(…)` rules. In fact, only the `derivative_uniformity` triggering rule exists in the WGSL standard. That said, Naga contributors are excited to see how this level of control unlocks a new ecosystem of configurable diagnostics.
 - Finally, `diagnostic(…)` rules are not yet emitted in WGSL output. This means that `wgsl-in` → `wgsl-out` is currently a lossy process. We felt that it was important to unblock users who needed `diagnostic(…)` rules (i.e., <https://github.com/gfx-rs/wgpu/issues/3135>) before we took significant effort to fix this (tracked in <https://github.com/gfx-rs/wgpu/issues/6496>).
 
-By @ErichDonGubler in [#6456](https://github.com/gfx-rs/wgpu/pull/6456), [#6148](https://github.com/gfx-rs/wgpu/pull/6148), [#6533](https://github.com/gfx-rs/wgpu/pull/6533).
+By @ErichDonGubler in [#6456](https://github.com/gfx-rs/wgpu/pull/6456), [#6148](https://github.com/gfx-rs/wgpu/pull/6148), [#6533](https://github.com/gfx-rs/wgpu/pull/6533), [#6353](https://github.com/gfx-rs/wgpu/pull/6353).
 
 ### New Features
 
@@ -99,6 +99,7 @@ By @ErichDonGubler in [#6456](https://github.com/gfx-rs/wgpu/pull/6456), [#6148]
 - Fix an issue where `naga` CLI would incorrectly skip the first positional argument when `--stdin-file-path` was specified. By @ErichDonGubler in [#6480](https://github.com/gfx-rs/wgpu/pull/6480).
 - Fix textureNumLevels in the GLSL backend. By @magcius in [#6483](https://github.com/gfx-rs/wgpu/pull/6483).
 - Implement `quantizeToF16()` for WGSL frontend, and WGSL, SPIR-V, HLSL, MSL, and GLSL backends. By @jamienicol in [#6519](https://github.com/gfx-rs/wgpu/pull/6519).
+- Add support for GLSL `usampler*` and `isampler*`. By @DavidPeicho in [#6513](https://github.com/gfx-rs/wgpu/pull/6513).
 
 #### General
 
@@ -138,6 +139,10 @@ By @ErichDonGubler in [#6456](https://github.com/gfx-rs/wgpu/pull/6456), [#6148]
 #### Vulkan
 
 - Fix surface capabilities being advertised when its query failed. By @wumpf in [#6510](https://github.com/gfx-rs/wgpu/pull/6510)
+
+### Metal
+
+- Fix surface creation crashing on iOS. By @mockersf in [#6535](https://github.com/gfx-rs/wgpu/pull/6535)
 
 
 ## 23.0.0 (2024-10-25)

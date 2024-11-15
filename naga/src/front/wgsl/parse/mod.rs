@@ -1,5 +1,6 @@
 use crate::diagnostic_filter::{
     self, DiagnosticFilter, DiagnosticFilterMap, DiagnosticFilterNode, FilterableTriggeringRule,
+    ShouldConflictOnFullDuplicate,
 };
 use crate::front::wgsl::error::{Error, ExpectedToken};
 use crate::front::wgsl::parse::directive::enable_extension::{
@@ -2167,7 +2168,7 @@ impl Parser {
             if let Some(DirectiveKind::Diagnostic) = DirectiveKind::from_ident(name) {
                 if let Some(filter) = self.diagnostic_filter(lexer)? {
                     let span = self.peek_rule_span(lexer);
-                    diagnostic_filters.add(filter, span)?;
+                    diagnostic_filters.add(filter, span, ShouldConflictOnFullDuplicate::Yes)?;
                 }
             } else {
                 return Err(Error::Unexpected(
@@ -2218,6 +2219,7 @@ impl Parser {
     fn function_decl<'a>(
         &mut self,
         lexer: &mut Lexer<'a>,
+        diagnostic_filter_leaf: Option<Handle<DiagnosticFilterNode>>,
         out: &mut ast::TranslationUnit<'a>,
         dependencies: &mut FastIndexSet<ast::Dependency<'a>>,
     ) -> Result<ast::Function<'a>, Error<'a>> {
@@ -2290,6 +2292,7 @@ impl Parser {
             arguments,
             result,
             body,
+            diagnostic_filter_leaf,
         };
 
         // done
@@ -2369,7 +2372,7 @@ impl Parser {
             if let Some(DirectiveKind::Diagnostic) = DirectiveKind::from_ident(name) {
                 if let Some(filter) = self.diagnostic_filter(lexer)? {
                     let span = self.peek_rule_span(lexer);
-                    diagnostic_filters.add(filter, span)?;
+                    diagnostic_filters.add(filter, span, ShouldConflictOnFullDuplicate::Yes)?;
                 }
                 continue;
             }
@@ -2525,13 +2528,13 @@ impl Parser {
                 Some(ast::GlobalDeclKind::Var(var))
             }
             (Token::Word("fn"), _) => {
-                if !diagnostic_filters.is_empty() {
-                    return Err(Error::DiagnosticAttributeNotYetImplementedAtParseSite {
-                        site_name_plural: "functions",
-                        spans: diagnostic_filters.spans().collect(),
-                    });
-                }
-                let function = self.function_decl(lexer, out, &mut dependencies)?;
+                let diagnostic_filter_leaf = Self::write_diagnostic_filters(
+                    &mut out.diagnostic_filters,
+                    diagnostic_filters,
+                    out.diagnostic_filter_leaf,
+                );
+                let function =
+                    self.function_decl(lexer, diagnostic_filter_leaf, out, &mut dependencies)?;
                 Some(ast::GlobalDeclKind::Fn(ast::Function {
                     entry_point: if let Some(stage) = stage.value {
                         if stage == ShaderStage::Compute && workgroup_size.value.is_none() {
@@ -2602,7 +2605,11 @@ impl Parser {
                     DirectiveKind::Diagnostic => {
                         if let Some(diagnostic_filter) = self.diagnostic_filter(&mut lexer)? {
                             let span = self.peek_rule_span(&lexer);
-                            diagnostic_filters.add(diagnostic_filter, span)?;
+                            diagnostic_filters.add(
+                                diagnostic_filter,
+                                span,
+                                ShouldConflictOnFullDuplicate::No,
+                            )?;
                         }
                         lexer.expect(Token::Separator(';'))?;
                     }
