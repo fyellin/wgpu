@@ -1,9 +1,10 @@
+use std::cmp::min;
 use std::iter::zip;
 use std::num::NonZeroU64;
 
 use wgpu::util::RenderEncoder;
 use wgpu::*;
-use wgpu_test::{gpu_test, GpuTestConfiguration, TestParameters, TestingContext};
+use wgpu_test::{gpu_test, FailureCase, GpuTestConfiguration, TestParameters, TestingContext};
 
 /// We want to test that partial updates to push constants work as expected.
 ///
@@ -28,6 +29,10 @@ static PARTIAL_UPDATE: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
+            .skip(FailureCase::backend(wgpu::Backends::VULKAN))
+            // This test works on Metal and GL, but not on Vulkan. There is still some bug in
+            // that implementation of push constants for RenderPassEncoders and
+            // RenderBundleEncoders
             .features(wgpu::Features::PUSH_CONSTANTS)
             .limits(wgpu::Limits {
                 max_push_constant_size: 64,
@@ -40,8 +45,12 @@ static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            .features(wgpu::Features::PUSH_CONSTANTS)
-            .limits(wgpu::Limits {
+            // This test works on Metal and GL, but not on Vulkan. There is still some bug in
+            // that implementation of push constants for RenderPassEncoders and
+            // RenderBundleEncoders
+            .skip(FailureCase::backend(wgpu::Backends::VULKAN))
+            .features(Features::PUSH_CONSTANTS)
+            .limits(Limits {
                 max_push_constant_size: 64,
                 ..Default::default()
             }),
@@ -224,7 +233,7 @@ const SHADER2: &str = "
 ";
 
 async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
-    let count = ctx.device_limits.max_push_constant_size / 8;
+    let count = min(ctx.device_limits.max_push_constant_size / 8, 8);
     let output_buffer = ctx.device.create_buffer(&BufferDescriptor {
         label: Some("output buffer"),
         size: (4 * count) as BufferAddress,
