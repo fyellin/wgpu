@@ -29,10 +29,10 @@ static PARTIAL_UPDATE: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            .skip(FailureCase::backend(wgpu::Backends::VULKAN))
-            // This test works on Metal and GL, but not on Vulkan. There is still some bug in
-            // that implementation of push constants for RenderPassEncoders and
-            // RenderBundleEncoders
+            // On DX12, naga produces code that can't be compiled.
+            // On Vulkan, we get a strange internal error that makes no sense.
+            // Code works on Metal and GL
+            .skip(FailureCase::backend(wgpu::Backends::VULKAN | wgpu::Backends::DX12))
             .features(wgpu::Features::PUSH_CONSTANTS)
             .limits(wgpu::Limits {
                 max_push_constant_size: 64,
@@ -45,10 +45,10 @@ static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            // This test works on Metal and GL, but not on Vulkan. There is still some bug in
-            // that implementation of push constants for RenderPassEncoders and
-            // RenderBundleEncoders
-            .skip(FailureCase::backend(wgpu::Backends::VULKAN))
+            // On DX12, naga produces code that can't be compiled.
+            // On Vulkan, we get a strange internal error that makes no sense.
+            // Code works on Metal and GL
+            .skip(FailureCase::backend(wgpu::Backends::VULKAN | wgpu::Backends::DX12))
             .features(Features::PUSH_CONSTANTS)
             .limits(Limits {
                 max_push_constant_size: 64,
@@ -198,7 +198,7 @@ async fn partial_update_test(ctx: TestingContext) {
 // so that each call to the vertex shader becomes a call to the fragment shader.
 
 const SHADER2: &str = "
-    // const COUNT = <value>u;  will be prepended in the code below
+    const COUNT = {count}u;  // will be replaced in code below
     const PUSH_CONSTANT_COUNT = 2u * COUNT;
     const POSITION: vec4f = vec4f(0, 0, 0, 1);
 
@@ -265,8 +265,7 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
     });
     let output_texture_view = output_texture.create_view(&Default::default());
 
-    let mut shader_code: String = format!("const COUNT = {count}u;\n");
-    shader_code.push_str(SHADER2);
+    let shader_code = SHADER2.replace("{count}", &count.to_string());
     let shader = ctx.device.create_shader_module(ShaderModuleDescriptor {
         label: Some("Shader"),
         source: ShaderSource::Wgsl(shader_code.into()),
