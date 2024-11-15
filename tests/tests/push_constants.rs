@@ -1,10 +1,9 @@
-use std::cmp::min;
 use std::iter::zip;
 use std::num::NonZeroU64;
 
 use wgpu::util::RenderEncoder;
 use wgpu::*;
-use wgpu_test::{gpu_test, GpuTestConfiguration, TestParameters, TestingContext};
+use wgpu_test::{gpu_test, FailureCase, GpuTestConfiguration, TestParameters, TestingContext};
 
 /// We want to test that partial updates to push constants work as expected.
 ///
@@ -161,8 +160,8 @@ async fn partial_update_test(ctx: TestingContext) {
 static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            // On Vulkan, we get a strange internal error that makes no sense.
-            // .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
+            // On DX12, we get a wrong answer!
+            .skip(FailureCase::backend(wgpu::Backends::DX12))
             .features(wgpu::Features::PUSH_CONSTANTS)
             .limits(wgpu::Limits {
                 max_push_constant_size: 128,
@@ -175,8 +174,8 @@ static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            // On Vulkan, we get a strange internal error that makes no sense.
-            // .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
+            // On DX12, we get the wrong answer!
+            .skip(FailureCase::backend(wgpu::Backends::DX12))
             .features(Features::PUSH_CONSTANTS)
             .limits(Limits {
                 max_push_constant_size: 128,
@@ -185,8 +184,8 @@ static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     )
     .run_async(|ctx| render_pass_test(ctx, true));
 
-// This shader subtracts the values in the second half of the push_constants from the
-// values in the first half, and stores the result in the buffer.
+// This shader subtracts the values in the first half of the push_constants from the
+// values in the second half, and stores the result in the buffer.
 // We test push constants in both the vertex shader and the fragment shader.
 // This shader expects to be called with COUNT times using PrimitiveTopology::PointList
 // so that each call to the vertex shader becomes a call to the fragment shader.
@@ -225,13 +224,13 @@ const SHADER2: &str = "
         @location(1) vertex_constant: i32
      ) -> @location(0) vec4f {
         let fragment_constant = push_constants.fragment_constants[ix];
-        data[ix] = vertex_constant - fragment_constant;
+        data[ix] = fragment_constant - vertex_constant;
         return vec4f();
     }
 ";
 
 async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
-    let count = min(ctx.device_limits.max_push_constant_size / 8, 8);
+    let count = ctx.device_limits.max_push_constant_size / 8;
     let output_buffer = ctx.device.create_buffer(&BufferDescriptor {
         label: Some("output buffer"),
         size: (4 * count) as BufferAddress,
@@ -345,10 +344,10 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
         }],
     });
 
-    let data: Vec<i32> = (0.. 2 * count).map(|i| (i * i) as i32).collect();
+    let data: Vec<i32> = (0..2 * count).map(|i| (i * i) as i32).collect();
     let data1 = &data[0..count as usize]; // part seen by vertex shader
-    let data2 = &data[count as usize ..];  // part seen by fragment shader
-    let expected_result: Vec<i32> = zip(data1, data2).map(|(a, b)| a - b).collect();
+    let data2 = &data[count as usize..]; // part seen by fragment shader
+    let expected_result: Vec<i32> = zip(data1, data2).map(|(a, b)| b - a).collect();
 
     fn do_encoding<'a>(
         encoder: &mut dyn RenderEncoder<'a>,
