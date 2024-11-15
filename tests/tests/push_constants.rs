@@ -29,12 +29,8 @@ static PARTIAL_UPDATE: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            // On DX12, naga produces code that can't be compiled.
             // On Vulkan, we get a strange internal error that makes no sense.
-            // Code works on Metal and GL
-            .skip(FailureCase::backend(
-                wgpu::Backends::VULKAN | wgpu::Backends::DX12,
-            ))
+            .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
             .features(wgpu::Features::PUSH_CONSTANTS)
             .limits(wgpu::Limits {
                 max_push_constant_size: 64,
@@ -47,12 +43,8 @@ static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
 static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            // On DX12, naga produces code that can't be compiled.
             // On Vulkan, we get a strange internal error that makes no sense.
-            // Code works on Metal and GL
-            .skip(FailureCase::backend(
-                wgpu::Backends::VULKAN | wgpu::Backends::DX12,
-            ))
+            .skip(FailureCase::backend(wgpu::Backends::VULKAN ))
             .features(Features::PUSH_CONSTANTS)
             .limits(Limits {
                 max_push_constant_size: 64,
@@ -203,10 +195,14 @@ async fn partial_update_test(ctx: TestingContext) {
 
 const SHADER2: &str = "
     const COUNT = {count}u;  // will be replaced in code below
-    const PUSH_CONSTANT_COUNT = 2u * COUNT;
     const POSITION: vec4f = vec4f(0, 0, 0, 1);
 
-    var<push_constant> push_constants: array<i32, PUSH_CONSTANT_COUNT>;
+    struct PushConstants {
+        vertex_constants: array<i32, COUNT>,
+        fragment_constants: array<i32, COUNT>,
+    }
+
+    var<push_constant> push_constants: PushConstants;
 
     @group(0) @binding(0) var<storage, read_write> data: array<i32>;
 
@@ -222,16 +218,16 @@ const SHADER2: &str = "
     ) -> VertexOutput {
         // We pass the constant to the fragment shader, because we aren't necessarily allowed
         // to write from a vertex shader.
-        return VertexOutput(POSITION, ix, push_constants[ix]);
+        return VertexOutput(POSITION, ix, push_constants.vertex_constants[ix]);
     }
 
     @fragment
     fn fragmentMain(
         @location(0) ix: u32,
-        @location(1) constant1: i32
+        @location(1) vertex_constant: i32
      ) -> @location(0) vec4f {
-        let constant2 = push_constants[ix + COUNT];
-        data[ix] = constant1 - constant2;
+        let fragment_constant = push_constants.fragment_constants[ix];
+        data[ix] = vertex_constant - fragment_constant;
         return vec4f();
     }
 ";
