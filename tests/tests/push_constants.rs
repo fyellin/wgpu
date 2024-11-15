@@ -32,7 +32,9 @@ static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
             // On DX12, naga produces code that can't be compiled.
             // On Vulkan, we get a strange internal error that makes no sense.
             // Code works on Metal and GL
-            .skip(FailureCase::backend(wgpu::Backends::VULKAN | wgpu::Backends::DX12))
+            .skip(FailureCase::backend(
+                wgpu::Backends::VULKAN | wgpu::Backends::DX12,
+            ))
             .features(wgpu::Features::PUSH_CONSTANTS)
             .limits(wgpu::Limits {
                 max_push_constant_size: 64,
@@ -48,7 +50,9 @@ static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
             // On DX12, naga produces code that can't be compiled.
             // On Vulkan, we get a strange internal error that makes no sense.
             // Code works on Metal and GL
-            .skip(FailureCase::backend(wgpu::Backends::VULKAN | wgpu::Backends::DX12))
+            .skip(FailureCase::backend(
+                wgpu::Backends::VULKAN | wgpu::Backends::DX12,
+            ))
             .features(Features::PUSH_CONSTANTS)
             .limits(Limits {
                 max_push_constant_size: 64,
