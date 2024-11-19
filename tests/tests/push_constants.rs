@@ -321,7 +321,7 @@ async fn render_pass_test(ctx: &TestingContext, use_render_bundle: bool) {
         }],
     });
 
-    let data: Vec<i32> = (0..8).map(|i| (i * i) as i32 - 1).collect();
+    let data: Vec<i32> = (0..8).map(|i| (i * i) - 1).collect();
 
     fn do_encoding<'a>(
         encoder: &mut dyn RenderEncoder<'a>,
