@@ -1,9 +1,9 @@
-use std::iter::zip;
+use std::mem::size_of;
 use std::num::NonZeroU64;
 
 use wgpu::util::RenderEncoder;
 use wgpu::*;
-use wgpu_test::{gpu_test, FailureCase, GpuTestConfiguration, TestParameters, TestingContext};
+use wgpu_test::{gpu_test, GpuTestConfiguration, TestParameters, TestingContext};
 
 /// We want to test that partial updates to push constants work as expected.
 ///
@@ -160,80 +160,58 @@ async fn partial_update_test(ctx: TestingContext) {
 static RENDER_PASS_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
     .parameters(
         TestParameters::default()
-            // On DX12, we get a wrong answer!
-            .skip(FailureCase::backend(wgpu::Backends::DX12))
-            .features(wgpu::Features::PUSH_CONSTANTS)
+            .features(Features::PUSH_CONSTANTS | Features::VERTEX_WRITABLE_STORAGE)
             .limits(wgpu::Limits {
-                max_push_constant_size: 128,
+                max_push_constant_size: 64,
                 ..Default::default()
             }),
     )
-    .run_async(|ctx| render_pass_test(ctx, false));
+    .run_async(move |ctx| async move {
+        for use_render_bundle in [false, true] {
+            render_pass_test(&ctx, use_render_bundle).await;
+        }
+    });
 
-#[gpu_test]
-static RENDER_BUNDLE_TEST: GpuTestConfiguration = GpuTestConfiguration::new()
-    .parameters(
-        TestParameters::default()
-            // On DX12, we get the wrong answer!
-            .skip(FailureCase::backend(wgpu::Backends::DX12))
-            .features(Features::PUSH_CONSTANTS)
-            .limits(Limits {
-                max_push_constant_size: 128,
-                ..Default::default()
-            }),
-    )
-    .run_async(|ctx| render_pass_test(ctx, true));
-
-// This shader subtracts the values in the first half of the push_constants from the
-// values in the second half, and stores the result in the buffer.
-// We test push constants in both the vertex shader and the fragment shader.
-// This shader expects to be called with COUNT times using PrimitiveTopology::PointList
-// so that each call to the vertex shader becomes a call to the fragment shader.
-
+// This shader simply  moves the values from vector_constants and push_constants into the
+// result buffer.  It expects to be called 4 times (with vector_index in 0..4) with its
+// topology being PointList, so that each vertex shader call leads to exactly one fragment
+// call.
 const SHADER2: &str = "
-    const COUNT = {count}u;  // will be replaced in code below
     const POSITION: vec4f = vec4f(0, 0, 0, 1);
 
     struct PushConstants {
-        vertex_constants: array<i32, COUNT>,
-        fragment_constants: array<i32, COUNT>,
+        vertex_constants: vec4i,
+        fragment_constants: vec4i,
     }
 
     var<push_constant> push_constants: PushConstants;
 
-    @group(0) @binding(0) var<storage, read_write> data: array<i32>;
+    @group(0) @binding(0) var<storage, read_write> result: array<i32>;
 
     struct VertexOutput {
         @builtin(position) position: vec4f,
         @location(0) index: u32,
-        @location(1) constant1: i32,
     }
 
-    @vertex
-    fn vertexMain(
+    @vertex fn vertex(
         @builtin(vertex_index) ix: u32,
     ) -> VertexOutput {
-        // We pass the constant to the fragment shader, because we aren't necessarily allowed
-        // to write from a vertex shader.
-        return VertexOutput(POSITION, ix, push_constants.vertex_constants[ix]);
+        result[ix] = push_constants.vertex_constants[ix];
+        return VertexOutput(POSITION, ix);
     }
 
-    @fragment
-    fn fragmentMain(
+    @fragment fn fragment(
         @location(0) ix: u32,
-        @location(1) vertex_constant: i32
      ) -> @location(0) vec4f {
-        let fragment_constant = push_constants.fragment_constants[ix];
-        data[ix] = fragment_constant - vertex_constant;
+        result[ix + 4u] = push_constants.fragment_constants[ix];
         return vec4f();
     }
 ";
 
-async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
-    let count = ctx.device_limits.max_push_constant_size / 8;
+async fn render_pass_test(ctx: &TestingContext, use_render_bundle: bool) {
     let output_buffer = ctx.device.create_buffer(&BufferDescriptor {
         label: Some("output buffer"),
-        size: (4 * count) as BufferAddress,
+        size: 8 * size_of::<u32>() as BufferAddress,
         usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
@@ -262,10 +240,9 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
     });
     let output_texture_view = output_texture.create_view(&Default::default());
 
-    let shader_code = SHADER2.replace("{count}", &count.to_string());
     let shader = ctx.device.create_shader_module(ShaderModuleDescriptor {
         label: Some("Shader"),
-        source: ShaderSource::Wgsl(shader_code.into()),
+        source: ShaderSource::Wgsl(SHADER2.into()),
     });
 
     let bind_group_layout = ctx
@@ -274,7 +251,7 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
             label: None,
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
-                visibility: ShaderStages::FRAGMENT,
+                visibility: ShaderStages::VERTEX_FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: false },
                     has_dynamic_offset: false,
@@ -290,7 +267,7 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[PushConstantRange {
                 stages: ShaderStages::VERTEX_FRAGMENT,
-                range: 0..(8 * count),
+                range: 0..8 * size_of::<u32>() as u32,
             }],
             ..Default::default()
         });
@@ -344,23 +321,19 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
         }],
     });
 
-    let data: Vec<i32> = (0..2 * count).map(|i| (i * i) as i32).collect();
-    let data1 = &data[0..count as usize]; // part seen by vertex shader
-    let data2 = &data[count as usize..]; // part seen by fragment shader
-    let expected_result: Vec<i32> = zip(data1, data2).map(|(a, b)| b - a).collect();
+    let data: Vec<i32> = (0..8).map(|i| (i * i) as i32 - 1).collect();
 
     fn do_encoding<'a>(
         encoder: &mut dyn RenderEncoder<'a>,
         pipeline: &'a RenderPipeline,
         bind_group: &'a BindGroup,
-        data: Vec<i32>,
+        data: &'a Vec<i32>,
     ) {
-        let count = (data.len() as u32) / 2;
         let data_as_u8: &[u8] = bytemuck::cast_slice(data.as_slice());
         encoder.set_pipeline(pipeline);
         encoder.set_push_constants(ShaderStages::VERTEX_FRAGMENT, 0, data_as_u8);
         encoder.set_bind_group(0, Some(bind_group), &[]);
-        encoder.draw(0..count, 0..1);
+        encoder.draw(0..4, 0..1);
     }
 
     let mut command_encoder = ctx
@@ -377,12 +350,12 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
                         sample_count: 1,
                         ..RenderBundleEncoderDescriptor::default()
                     });
-            do_encoding(&mut render_bundle_encoder, &pipeline, &bind_group, data);
+            do_encoding(&mut render_bundle_encoder, &pipeline, &bind_group, &data);
             let render_bundle = render_bundle_encoder.finish(&RenderBundleDescriptor::default());
             render_pass.execute_bundles([&render_bundle]);
         } else {
             // Execute the commands directly.
-            do_encoding(&mut render_pass, &pipeline, &bind_group, data);
+            do_encoding(&mut render_pass, &pipeline, &bind_group, &data);
         }
     }
     // Move the result to the cpu buffer, so that we can read them.
@@ -393,9 +366,9 @@ async fn render_pass_test(ctx: TestingContext, use_render_bundle: bool) {
     ctx.async_poll(wgpu::Maintain::wait())
         .await
         .panic_on_timeout();
-    let data = cpu_buffer.slice(..).get_mapped_range();
-    let result = bytemuck::cast_slice::<u8, i32>(&data).to_vec();
-    drop(data);
+    let mapped_data = cpu_buffer.slice(..).get_mapped_range();
+    let result = bytemuck::cast_slice::<u8, i32>(&mapped_data).to_vec();
+    drop(mapped_data);
     cpu_buffer.unmap();
-    assert_eq!(result, expected_result);
+    assert_eq!(&result, &data);
 }
